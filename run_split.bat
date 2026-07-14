@@ -4,8 +4,8 @@ setlocal
 set "BASE=%~dp0"
 set "EXE="
 
-if exist "%BASE%dist\split_pdf_by_titul.exe" set "EXE=%BASE%dist\split_pdf_by_titul.exe"
-if not defined EXE if exist "%BASE%split_pdf_by_titul.exe" set "EXE=%BASE%split_pdf_by_titul.exe"
+if exist "%BASE%split_pdf_by_titul.exe" set "EXE=%BASE%split_pdf_by_titul.exe"
+if not defined EXE if exist "%BASE%dist\split_pdf_by_titul.exe" set "EXE=%BASE%dist\split_pdf_by_titul.exe"
 
 if not defined EXE (
     echo split_pdf_by_titul.exe not found.

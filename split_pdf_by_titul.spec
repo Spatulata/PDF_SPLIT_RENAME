@@ -3,6 +3,27 @@
 
 block_cipher = None
 
+# PDF/OCR нужны только базовые форматы PNG/JPEG — AVIF/WebP/HEIF ломают PyInstaller на Windows.
+PIL_SKIP_MODULES = (
+    "PIL._avif",
+    "PIL._heif",
+    "PIL._webp",
+    "PIL._imagingtk",
+)
+
+
+def _drop_optional_pil_binaries(binaries):
+    out = []
+    for name, path, typecode in binaries:
+        low = name.replace("\\", "/").lower()
+        if any(skip.lower().replace(".", "/") in low for skip in PIL_SKIP_MODULES):
+            continue
+        if any(tag in low for tag in ("_avif.", "_heif.", "_webp.", "_imagingtk.")):
+            continue
+        out.append((name, path, typecode))
+    return out
+
+
 a = Analysis(
     ["split_pdf_by_titul.py"],
     pathex=[],
@@ -19,12 +40,20 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "scipy", "pandas"],
+    excludes=[
+        "tkinter",
+        "matplotlib",
+        "scipy",
+        "pandas",
+        *PIL_SKIP_MODULES,
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+a.binaries = _drop_optional_pil_binaries(a.binaries)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -39,7 +68,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,

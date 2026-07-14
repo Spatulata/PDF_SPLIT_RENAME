@@ -4,8 +4,8 @@ setlocal
 set "BASE=%~dp0"
 set "EXE="
 
-if exist "%BASE%dist\rename_pdfs_by_titul.exe" set "EXE=%BASE%dist\rename_pdfs_by_titul.exe"
-if not defined EXE if exist "%BASE%rename_pdfs_by_titul.exe" set "EXE=%BASE%rename_pdfs_by_titul.exe"
+if exist "%BASE%rename_pdfs_by_titul.exe" set "EXE=%BASE%rename_pdfs_by_titul.exe"
+if not defined EXE if exist "%BASE%dist\rename_pdfs_by_titul.exe" set "EXE=%BASE%dist\rename_pdfs_by_titul.exe"
 
 if not defined EXE (
     echo rename_pdfs_by_titul.exe not found.
