@@ -554,9 +554,9 @@ def main() -> int:
         return 1
 
     installed = tp.list_installed_tesseract_langs()
-    tessdata = tp.get_tessdata_dir()
-    if tessdata:
-        print(f"Tesseract tessdata: {tessdata}")
+    setup_info = tp.describe_tesseract_setup()
+    if setup_info:
+        print(setup_info)
     if installed:
         print(f"Tesseract языки: {', '.join(installed)}")
 

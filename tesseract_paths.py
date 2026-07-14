@@ -9,6 +9,7 @@ from pathlib import Path
 import pytesseract
 
 _TESSDATA_DIR: Path | None = None
+_TESSERACT_EXE: Path | None = None
 _TESSERACT_CONFIG: str = ""
 
 
@@ -22,6 +23,10 @@ def get_tessdata_dir() -> Path | None:
     return _TESSDATA_DIR
 
 
+def get_tesseract_exe() -> Path | None:
+    return _TESSERACT_EXE
+
+
 def tessdata_config(extra: str = "") -> str:
     parts = []
     if _TESSERACT_CONFIG:
@@ -31,118 +36,126 @@ def tessdata_config(extra: str = "") -> str:
     return " ".join(parts)
 
 
-def _apply_tesseract_paths(exe: Path, tessdata: Path) -> None:
-    global _TESSDATA_DIR, _TESSERACT_CONFIG
+def _langs_on_disk(tessdata: Path) -> set[str]:
+    if not tessdata.is_dir():
+        return set()
+    return {path.stem for path in tessdata.glob("*.traineddata")}
+
+
+def _matched_tesseract_pairs(bundle: Path) -> list[tuple[Path, Path, int]]:
+    """Только согласованные пары exe + tessdata (не смешиваем portable и Program Files)."""
+    pairs: list[tuple[Path, Path, int]] = []
+
+    portable_exe = bundle / "tesseract" / "tesseract.exe"
+    portable_tess = bundle / "tesseract" / "tessdata"
+    if portable_exe.is_file() and portable_tess.is_dir():
+        pairs.append((portable_exe, portable_tess, 100))
+
+    for exe in (
+        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+    ):
+        tessdata = exe.parent / "tessdata"
+        if exe.is_file() and tessdata.is_dir():
+            pairs.append((exe, tessdata, 50))
+
+    return pairs
+
+
+def _apply_tesseract_paths(exe: Path, tessdata: Path, extra_config: str = "") -> None:
+    global _TESSDATA_DIR, _TESSERACT_CONFIG, _TESSERACT_EXE
 
     exe = exe.resolve()
     tessdata = tessdata.resolve()
     prefix = tessdata.parent
 
     pytesseract.pytesseract.tesseract_cmd = str(exe)
-    os.environ["TESSDATA_PREFIX"] = str(prefix) + os.sep
+    os.environ["TESSDATA_PREFIX"] = str(prefix)
+    _TESSERACT_EXE = exe
     _TESSDATA_DIR = tessdata
-    _TESSERACT_CONFIG = ""
+    _TESSERACT_CONFIG = extra_config.strip()
 
 
-def _tesseract_exe_candidates(bundle: Path) -> list[Path]:
+def _path_apply_variants(exe: Path, tessdata: Path) -> list[tuple[str, str]]:
+    """Разные способы указать tessdata — portable Tesseract на Windows капризный."""
+    exe = exe.resolve()
+    tessdata = tessdata.resolve()
+    prefix = tessdata.parent
+    td_posix = tessdata.as_posix()
+
     return [
-        bundle / "tesseract" / "tesseract.exe",
-        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+        ("prefix", ""),
+        ("prefix_slash", ""),
+        ("tessdata_dir_posix", f"--tessdata-dir {td_posix}"),
+        ("tessdata_dir_native", f"--tessdata-dir {tessdata}"),
     ]
 
 
-def _tessdata_candidates(bundle: Path, exe: Path) -> list[Path]:
-    seen: set[str] = set()
-    out: list[Path] = []
-    for candidate in (
-        bundle / "tesseract" / "tessdata",
-        exe.parent / "tessdata",
-        Path(r"C:\Program Files\Tesseract-OCR\tessdata"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tessdata"),
-    ):
-        key = str(candidate.resolve()).lower() if candidate.exists() else str(candidate).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        if candidate.is_dir():
-            out.append(candidate)
-    return out
-
-
-def _langs_on_disk(tessdata: Path) -> set[str]:
-    return {path.stem for path in tessdata.glob("*.traineddata")}
-
-
-def _score_pair(
-    exe: Path,
-    tessdata: Path,
-    bundle: Path,
-    required: list[str],
-) -> int:
-    langs = _langs_on_disk(tessdata)
-    if not langs:
-        return -1
-
-    score = len(langs)
-    score += 20 * sum(1 for lang in required if lang in langs)
-    if all(lang in langs for lang in required):
-        score += 50
-
-    portable_root = (bundle / "tesseract").resolve()
-    if exe.resolve().parent == portable_root:
-        score += 10
-    if tessdata.resolve() == (portable_root / "tessdata").resolve() and required and all(
-        lang in langs for lang in required
-    ):
-        score += 5
-
-    return score
-
-
-def find_tesseract_pair(bundle: Path, required_langs: list[str] | None = None) -> tuple[Path, Path] | None:
-    required = required_langs or ["rus"]
-    best: tuple[int, Path, Path] | None = None
-
-    for exe in _tesseract_exe_candidates(bundle):
-        if not exe.is_file():
-            continue
-        for tessdata in _tessdata_candidates(bundle, exe):
-            score = _score_pair(exe, tessdata, bundle, required)
-            if score < 0:
-                continue
-            if best is None or score > best[0]:
-                best = (score, exe, tessdata)
-
-    if best is None:
+def _probe_pair(exe: Path, tessdata: Path, required: list[str]) -> set[str] | None:
+    """Пробует пару exe+tessdata; возвращает загруженные языки или None."""
+    on_disk = _langs_on_disk(tessdata)
+    if not on_disk:
         return None
-    return best[1], best[2]
+    if required and not all(lang in on_disk for lang in required):
+        return None
+
+    for _name, extra_config in _path_apply_variants(exe, tessdata):
+        prefix = tessdata.parent.resolve()
+        _apply_tesseract_paths(exe, tessdata, extra_config)
+
+        # Варианты TESSDATA_PREFIX
+        for prefix_value in (str(prefix), str(prefix) + os.sep):
+            os.environ["TESSDATA_PREFIX"] = prefix_value
+            try:
+                loaded = set(pytesseract.get_languages(config=tessdata_config()))
+            except pytesseract.TesseractError:
+                continue
+            if loaded and all(lang in loaded for lang in required):
+                return loaded
+
+    return None
+
+
+def find_working_tesseract_pair(
+    bundle: Path,
+    required_langs: list[str] | None = None,
+) -> tuple[Path, Path, set[str]] | None:
+    required = required_langs or ["rus"]
+
+    for exe, tessdata, _priority in _matched_tesseract_pairs(bundle):
+        loaded = _probe_pair(exe, tessdata, required)
+        if loaded is not None:
+            return exe, tessdata, loaded
+
+    return None
 
 
 def configure_tesseract(bundle: Path, required_langs: list[str] | None = None) -> bool:
-    global _TESSDATA_DIR, _TESSERACT_CONFIG
+    global _TESSDATA_DIR, _TESSERACT_CONFIG, _TESSERACT_EXE
 
     required = required_langs or ["rus"]
-    pair = find_tesseract_pair(bundle, required)
-    if pair is not None:
-        exe, tessdata = pair
-        _apply_tesseract_paths(exe, tessdata)
+    found = find_working_tesseract_pair(bundle, required)
+    if found is not None:
+        exe, tessdata, _loaded = found
+        # Пути уже применены в _probe_pair; повторно пробуем финальную конфигурацию
+        _probe_pair(exe, tessdata, required)
         return True
 
-    if sys.platform == "win32":
-        return False
+    _TESSDATA_DIR = None
+    _TESSERACT_EXE = None
+    _TESSERACT_CONFIG = ""
 
-    try:
-        pytesseract.get_tesseract_version()
-        return True
-    except pytesseract.TesseractNotFoundError:
-        return False
+    if sys.platform != "win32":
+        try:
+            pytesseract.get_tesseract_version()
+            return True
+        except pytesseract.TesseractNotFoundError:
+            return False
+
+    return False
 
 
 def list_installed_tesseract_langs() -> list[str]:
-    tessdata = get_tessdata_dir()
-    on_disk = sorted(_langs_on_disk(tessdata)) if tessdata and tessdata.is_dir() else []
-
     try:
         loaded = sorted(pytesseract.get_languages(config=tessdata_config()))
         if loaded:
@@ -150,7 +163,10 @@ def list_installed_tesseract_langs() -> list[str]:
     except pytesseract.TesseractError:
         pass
 
-    return on_disk
+    tessdata = get_tessdata_dir()
+    if tessdata and tessdata.is_dir():
+        return sorted(_langs_on_disk(tessdata))
+    return []
 
 
 def validate_tesseract_lang(lang: str) -> tuple[bool, list[str]]:
@@ -161,11 +177,12 @@ def validate_tesseract_lang(lang: str) -> tuple[bool, list[str]]:
 
 def verify_tesseract_runtime(lang: str) -> None:
     tessdata = get_tessdata_dir()
-    if tessdata is None:
+    exe = get_tesseract_exe()
+    if tessdata is None or exe is None:
         raise RuntimeError(
             "Tesseract/tessdata не найдены.\n"
-            "Нужна папка tesseract\\tessdata\\ с rus.traineddata\n"
-            "или установленный Tesseract в Program Files."
+            "Установите Tesseract: https://github.com/UB-Mannheim/tesseract/wiki\n"
+            "Или положите portable tesseract\\ рядом с exe."
         )
 
     for part in lang.split("+"):
@@ -176,7 +193,7 @@ def verify_tesseract_runtime(lang: str) -> None:
         if not lang_file.is_file():
             raise RuntimeError(
                 f"Нет языкового файла: {lang_file}\n"
-                "Запустите install_tesseract_rus.bat — он скопирует rus в portable tessdata\\"
+                "Запустите install_tesseract_rus.bat"
             )
 
     try:
@@ -185,31 +202,44 @@ def verify_tesseract_runtime(lang: str) -> None:
         prefix = os.environ.get("TESSDATA_PREFIX", "")
         raise RuntimeError(
             "Tesseract не смог загрузить языки.\n"
+            f"  exe: {exe}\n"
             f"  tessdata: {tessdata}\n"
             f"  TESSDATA_PREFIX: {prefix}\n"
+            f"  config: {tessdata_config() or '(empty)'}\n"
             f"  {exc}"
         ) from exc
 
     missing = [part for part in lang.split("+") if part.strip() and part.strip() not in loaded]
     if missing:
+        on_disk = ", ".join(sorted(_langs_on_disk(tessdata))) or "нет файлов"
         raise RuntimeError(
             f"Языки не загружены: {', '.join(missing)}\n"
+            f"  exe: {exe}\n"
             f"  tessdata: {tessdata}\n"
-            f"  доступно: {', '.join(sorted(loaded))}"
+            f"  файлы на диске: {on_disk}\n"
+            f"  загружено Tesseract: {', '.join(sorted(loaded)) or 'ничего'}\n\n"
+            "Portable tesseract\\ не работает — установите Tesseract в Program Files\n"
+            "или пересоберите папку tesseract\\ целиком из рабочего portable-бандла."
         )
 
 
+def describe_tesseract_setup() -> str:
+    exe = get_tesseract_exe()
+    tessdata = get_tessdata_dir()
+    if exe and tessdata:
+        return f"Tesseract: {exe}\nTesseract tessdata: {tessdata}"
+    return ""
+
+
 def tesseract_install_hint() -> str:
-    bundle_hint = "tesseract\\tessdata\\"
     if sys.platform == "win32":
         return (
-            "Tesseract OCR не найден.\n"
-            "Вариант 1: положите portable Tesseract рядом с exe:\n"
-            "  tesseract\\tesseract.exe\n"
-            "  tesseract\\tessdata\\rus.traineddata\n"
-            "Вариант 2: установите Tesseract и запустите install_tesseract_rus.bat\n"
+            "Tesseract OCR не найден или не загружает rus.\n"
+            "Вариант 1 (рекомендуется): установите Tesseract:\n"
             "  https://github.com/UB-Mannheim/tesseract/wiki\n"
-            f"Вариант 3: install_tesseract_rus.bat скопирует rus в {bundle_hint}"
+            "  при установке отметьте Russian language\n"
+            "Вариант 2: install_tesseract_rus.bat скопирует rus в tesseract\\tessdata\\\n"
+            "Вариант 3: portable tesseract\\ — exe + tessdata + все DLL из одного комплекта"
         )
     return (
         "Tesseract OCR не установлен.\n"
@@ -220,18 +250,18 @@ def tesseract_install_hint() -> str:
 
 def tesseract_lang_hint(lang: str, missing: list[str]) -> str:
     tessdata = get_tessdata_dir()
+    exe = get_tesseract_exe()
     tessdata_hint = str(tessdata) if tessdata else r"tesseract\tessdata"
-    installed = list_installed_tesseract_langs()
-    installed_hint = ", ".join(installed[:12]) if installed else "не найдены"
+    exe_hint = str(exe) if exe else "не найден"
+    on_disk = ", ".join(sorted(_langs_on_disk(tessdata))) if tessdata else "не найдены"
     missing_hint = ", ".join(missing)
     return (
         f"Языковой пакет Tesseract не найден: {missing_hint}\n"
+        f"exe: {exe_hint}\n"
         f"Папка tessdata: {tessdata_hint}\n"
-        f"Установленные языки: {installed_hint}\n\n"
+        f"Файлы на диске: {on_disk}\n\n"
         "Как исправить на Windows:\n"
-        "  1) Запустите install_tesseract_rus.bat — скопирует rus в portable tessdata\\\n"
-        "  2) Или вручную скопируйте rus.traineddata в tesseract\\tessdata\\\n"
-        "     из C:\\Program Files\\Tesseract-OCR\\tessdata\\\n"
-        "  3) Или скачайте:\n"
-        "     https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata"
+        "  1) Установите Tesseract с Russian language (Program Files)\n"
+        "  2) install_tesseract_rus.bat — скопирует rus в portable tessdata\\\n"
+        "  3) Пересоберите exe: build_windows.bat"
     )

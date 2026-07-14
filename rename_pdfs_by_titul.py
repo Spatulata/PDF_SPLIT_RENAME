@@ -506,9 +506,9 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    tessdata = tp.get_tessdata_dir()
-    if tessdata:
-        print(f"Tesseract tessdata: {tessdata}")
+    setup_info = tp.describe_tesseract_setup()
+    if setup_info:
+        print(setup_info)
 
     print(f"Папка: {folder}")
     print(f"OCR: dpi={args.dpi}, lang={args.lang}, deskew={'нет' if args.no_deskew else 'да'}")
