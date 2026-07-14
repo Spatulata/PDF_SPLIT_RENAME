@@ -26,6 +26,9 @@ import pytesseract
 from PIL import Image
 
 
+import tesseract_paths as tp
+
+
 # Зоны шапки титульника: номер (центр) и название (строка под номерами)
 HEADER_REGION = (0.0, 0.05, 1.0, 0.32)
 NUMBER_REGION = (0.20, 0.05, 0.78, 0.20)
@@ -82,163 +85,12 @@ class DocMeta:
     raw_header: str = ""
 
 
-_TESSDATA_DIR: Path | None = None
-_TESSERACT_CONFIG: str = ""
-
-
 def get_bundle_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    # source next to split script; portable package may copy both
-    return Path(__file__).resolve().parent
-
-
-def get_tessdata_dir() -> Path | None:
-    return _TESSDATA_DIR
-
-
-def tessdata_config(extra: str = "") -> str:
-    parts = []
-    if _TESSERACT_CONFIG:
-        parts.append(_TESSERACT_CONFIG)
-    if extra:
-        parts.append(extra.strip())
-    return " ".join(parts)
-
-
-def _apply_tesseract_paths(exe: Path, tessdata: Path) -> None:
-    """Настраивает portable Tesseract рядом с exe."""
-    global _TESSDATA_DIR, _TESSERACT_CONFIG
-
-    exe = exe.resolve()
-    tessdata = tessdata.resolve()
-    prefix = tessdata.parent
-
-    pytesseract.pytesseract.tesseract_cmd = str(exe)
-    os.environ["TESSDATA_PREFIX"] = str(prefix) + os.sep
-    _TESSDATA_DIR = tessdata
-    _TESSERACT_CONFIG = ""
-
-
-def _tesseract_exe_candidates() -> list[Path]:
-    bundle = get_bundle_dir()
-    return [
-        bundle / "tesseract" / "tesseract.exe",
-        # If launched from scan_split package layout
-        bundle.parent / "tesseract" / "tesseract.exe",
-        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ]
-
-
-def _resolve_tessdata_dir(exe: Path) -> Path | None:
-    candidates = [
-        get_bundle_dir() / "tesseract" / "tessdata",
-        get_bundle_dir().parent / "tesseract" / "tessdata",
-        exe.parent / "tessdata",
-    ]
-    for tessdata in candidates:
-        if tessdata.is_dir() and any(tessdata.glob("*.traineddata")):
-            return tessdata
-    return None
+    return tp.get_bundle_dir(__file__)
 
 
 def configure_tesseract() -> bool:
-    global _TESSDATA_DIR, _TESSERACT_CONFIG
-
-    if sys.platform == "win32":
-        for exe in _tesseract_exe_candidates():
-            if not exe.is_file():
-                continue
-            tessdata = _resolve_tessdata_dir(exe)
-            if tessdata is None:
-                continue
-            _apply_tesseract_paths(exe, tessdata)
-            return True
-
-    try:
-        pytesseract.get_tesseract_version()
-        for exe in _tesseract_exe_candidates():
-            if exe.is_file():
-                tessdata = _resolve_tessdata_dir(exe)
-                if tessdata is not None:
-                    _apply_tesseract_paths(exe, tessdata)
-                    break
-        return True
-    except pytesseract.TesseractNotFoundError:
-        return False
-
-
-def list_installed_tesseract_langs() -> list[str]:
-    try:
-        return sorted(pytesseract.get_languages(config=tessdata_config()))
-    except pytesseract.TesseractError:
-        tessdata = get_tessdata_dir()
-        if tessdata is None or not tessdata.is_dir():
-            return []
-        return sorted(path.stem for path in tessdata.glob("*.traineddata"))
-
-
-def validate_tesseract_lang(lang: str) -> tuple[bool, list[str]]:
-    installed = set(list_installed_tesseract_langs())
-    missing: list[str] = []
-    for part in lang.split("+"):
-        part = part.strip()
-        if part and part not in installed:
-            missing.append(part)
-    return len(missing) == 0, missing
-
-
-def verify_tesseract_runtime(lang: str) -> None:
-    tessdata = get_tessdata_dir()
-    if tessdata is None:
-        raise RuntimeError("Папка tessdata не найдена рядом с tesseract.exe")
-
-    for part in lang.split("+"):
-        part = part.strip()
-        if not part:
-            continue
-        lang_file = tessdata / f"{part}.traineddata"
-        if not lang_file.is_file():
-            raise RuntimeError(
-                f"Нет языкового файла: {lang_file}\n"
-                "Запустите install_tesseract_rus.bat или положите rus.traineddata в tessdata\\"
-            )
-
-    try:
-        loaded = set(pytesseract.get_languages(config=tessdata_config()))
-    except pytesseract.TesseractError as exc:
-        prefix = os.environ.get("TESSDATA_PREFIX", "")
-        raise RuntimeError(
-            "Tesseract не смог загрузить языки.\n"
-            f"  tessdata: {tessdata}\n"
-            f"  TESSDATA_PREFIX: {prefix}\n"
-            f"  {exc}"
-        ) from exc
-
-    missing = [p for p in lang.split("+") if p.strip() and p.strip() not in loaded]
-    if missing:
-        raise RuntimeError(
-            f"Языки не загружены: {', '.join(missing)}\n"
-            f"  tessdata: {tessdata}\n"
-            f"  доступно: {', '.join(sorted(loaded))}"
-        )
-
-
-def tesseract_install_hint() -> str:
-    if sys.platform == "win32":
-        return (
-            "Tesseract OCR не найден.\n"
-            "Положите portable Tesseract рядом с exe:\n"
-            "  tesseract\\tesseract.exe\n"
-            "  tesseract\\tessdata\\rus.traineddata\n"
-            "Или установите: https://github.com/UB-Mannheim/tesseract/wiki"
-        )
-    return (
-        "Tesseract OCR не установлен.\n"
-        "macOS: brew install tesseract tesseract-lang\n"
-        "Ubuntu: sudo apt install tesseract-ocr tesseract-ocr-rus"
-    )
+    return tp.configure_tesseract(get_bundle_dir(), ["rus"])
 
 
 def normalize_text(text: str) -> str:
@@ -341,7 +193,7 @@ def ocr_image(image: Image.Image, lang: str, psm: int = 6) -> str:
     return pytesseract.image_to_string(
         image,
         lang=lang,
-        config=tessdata_config(f"--psm {psm}"),
+        config=tp.tessdata_config(f"--psm {psm}"),
     )
 
 
@@ -640,25 +492,21 @@ def main() -> int:
         if not configure_tesseract():
             raise pytesseract.TesseractNotFoundError()
     except pytesseract.TesseractNotFoundError:
-        print(tesseract_install_hint(), file=sys.stderr)
+        print(tp.tesseract_install_hint(), file=sys.stderr)
         return 1
 
-    lang_ok, missing = validate_tesseract_lang(args.lang)
+    lang_ok, missing = tp.validate_tesseract_lang(args.lang)
     if not lang_ok:
-        print(
-            f"Нет языкового пакета Tesseract: {', '.join(missing)}\n"
-            f"Нужен файл tessdata\\{missing[0]}.traineddata",
-            file=sys.stderr,
-        )
+        print(tp.tesseract_lang_hint(args.lang, missing), file=sys.stderr)
         return 1
 
     try:
-        verify_tesseract_runtime(args.lang)
+        tp.verify_tesseract_runtime(args.lang)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
-    tessdata = get_tessdata_dir()
+    tessdata = tp.get_tessdata_dir()
     if tessdata:
         print(f"Tesseract tessdata: {tessdata}")
 

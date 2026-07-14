@@ -3,37 +3,42 @@ setlocal
 cd /d "%~dp0"
 
 set "URL=https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata"
-set "TARGET="
+set "PORTABLE=%~dp0tesseract\tessdata"
+set "TARGET=%PORTABLE%\rus.traineddata"
 
-if exist "C:\Program Files\Tesseract-OCR\tessdata" (
-    set "TARGET=C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata"
-)
-if not defined TARGET if exist "C:\Program Files (x86)\Tesseract-OCR\tessdata" (
-    set "TARGET=C:\Program Files (x86)\Tesseract-OCR\tessdata\rus.traineddata"
-)
-if not defined TARGET if exist "%~dp0tesseract\tessdata" (
-    set "TARGET=%~dp0tesseract\tessdata\rus.traineddata"
-)
-if not defined TARGET if exist "%~dp0dist\tesseract\tessdata" (
-    set "TARGET=%~dp0dist\tesseract\tessdata\rus.traineddata"
-)
-
-if not defined TARGET (
-    echo [ERROR] tessdata folder not found.
-    echo Install Tesseract first:
-    echo   https://github.com/UB-Mannheim/tesseract/wiki
-    pause
-    exit /b 1
+if not exist "%PORTABLE%" (
+    echo Creating portable tessdata folder...
+    mkdir "%PORTABLE%"
 )
 
 if exist "%TARGET%" (
-    echo rus.traineddata already exists:
+    echo rus.traineddata already exists in portable folder:
     echo   %TARGET%
     pause
     exit /b 0
 )
 
-echo Downloading Russian language pack...
+if exist "C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata" (
+    echo Copying rus.traineddata from Program Files to portable folder...
+    copy /Y "C:\Program Files\Tesseract-OCR\tessdata\rus.traineddata" "%TARGET%" >nul
+    if exist "%TARGET%" (
+        echo Done: %TARGET%
+        pause
+        exit /b 0
+    )
+)
+
+if exist "C:\Program Files (x86)\Tesseract-OCR\tessdata\rus.traineddata" (
+    echo Copying rus.traineddata from Program Files x86 to portable folder...
+    copy /Y "C:\Program Files (x86)\Tesseract-OCR\tessdata\rus.traineddata" "%TARGET%" >nul
+    if exist "%TARGET%" (
+        echo Done: %TARGET%
+        pause
+        exit /b 0
+    )
+)
+
+echo Downloading Russian language pack to portable folder...
 echo Target: %TARGET%
 echo.
 
@@ -43,7 +48,9 @@ powershell -NoProfile -Command ^
 if errorlevel 1 (
     echo.
     echo [ERROR] Download failed.
-    echo Download manually and copy to tessdata folder:
+    echo Copy manually to:
+    echo   %TARGET%
+    echo From:
     echo   %URL%
     pause
     exit /b 1

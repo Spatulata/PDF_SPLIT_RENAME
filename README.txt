@@ -19,7 +19,9 @@ scan_split — portable (одна папка)
       rus.traineddata
       eng.traineddata
 
-  Если rus.traineddata нет — install_tesseract_rus.bat
+  Если rus.traineddata нет в portable tessdata:
+  install_tesseract_rus.bat
+  (скопирует из Program Files или скачает)
 
   Исходники и сборка (если нужно пересобрать exe):
   *.py  *.spec  requirements*.txt  build_windows.bat

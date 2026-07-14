@@ -36,6 +36,7 @@ a = Analysis(
         "PIL",
         "PIL.Image",
         "pytesseract",
+        "tesseract_paths",
     ],
     hookspath=[],
     hooksconfig={},
