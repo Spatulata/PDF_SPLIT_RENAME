@@ -107,10 +107,28 @@ def get_tessdata_dir() -> Path | None:
 
 
 def tessdata_config(extra: str = "") -> str:
-    cfg = _TESSERACT_CONFIG
+    parts = []
+    if _TESSERACT_CONFIG:
+        parts.append(_TESSERACT_CONFIG)
     if extra:
-        return f"{cfg} {extra}".strip()
-    return cfg
+        parts.append(extra.strip())
+    return " ".join(parts)
+
+
+def _apply_tesseract_paths(exe: Path, tessdata: Path) -> None:
+    """Настраивает portable Tesseract рядом с exe."""
+    global _TESSDATA_DIR, _TESSERACT_CONFIG
+
+    exe = exe.resolve()
+    tessdata = tessdata.resolve()
+    prefix = tessdata.parent
+
+    pytesseract.pytesseract.tesseract_cmd = str(exe)
+    # TESSDATA_PREFIX = папка tesseract\ (внутри неё лежит tessdata\)
+    os.environ["TESSDATA_PREFIX"] = str(prefix) + os.sep
+    _TESSDATA_DIR = tessdata
+    # Не передаём --tessdata-dir: на Windows кавычки/слэши ломают путь к rus.traineddata
+    _TESSERACT_CONFIG = ""
 
 
 def _tesseract_exe_candidates() -> list[Path]:
@@ -127,7 +145,7 @@ def _resolve_tessdata_dir(exe: Path) -> Path | None:
         exe.parent / "tessdata",
     ]
     for tessdata in candidates:
-        if tessdata.is_dir():
+        if tessdata.is_dir() and any(tessdata.glob("*.traineddata")):
             return tessdata
     return None
 
@@ -143,10 +161,7 @@ def configure_tesseract() -> bool:
             tessdata = _resolve_tessdata_dir(exe)
             if tessdata is None:
                 continue
-            pytesseract.pytesseract.tesseract_cmd = str(exe)
-            os.environ["TESSDATA_PREFIX"] = str(tessdata.parent) + os.sep
-            _TESSDATA_DIR = tessdata
-            _TESSERACT_CONFIG = f'--tessdata-dir "{tessdata}"'
+            _apply_tesseract_paths(exe, tessdata)
             return True
 
     try:
@@ -155,9 +170,7 @@ def configure_tesseract() -> bool:
             if exe.is_file():
                 tessdata = _resolve_tessdata_dir(exe)
                 if tessdata is not None:
-                    _TESSDATA_DIR = tessdata
-                    _TESSERACT_CONFIG = f'--tessdata-dir "{tessdata}"'
-                    os.environ["TESSDATA_PREFIX"] = str(tessdata.parent) + os.sep
+                    _apply_tesseract_paths(exe, tessdata)
                     break
         return True
     except pytesseract.TesseractNotFoundError:
@@ -184,6 +197,43 @@ def validate_tesseract_lang(lang: str) -> tuple[bool, list[str]]:
         if part not in installed:
             missing.append(part)
     return len(missing) == 0, missing
+
+
+def verify_tesseract_runtime(lang: str) -> None:
+    """Проверяет, что Tesseract реально читает языки (не только файлы на диске)."""
+    tessdata = get_tessdata_dir()
+    if tessdata is None:
+        raise RuntimeError("Папка tessdata не найдена рядом с tesseract.exe")
+
+    for part in lang.split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        lang_file = tessdata / f"{part}.traineddata"
+        if not lang_file.is_file():
+            raise RuntimeError(
+                f"Нет языкового файла: {lang_file}\n"
+                "Запустите install_tesseract_rus.bat или положите rus.traineddata в tessdata\\"
+            )
+
+    try:
+        loaded = set(pytesseract.get_languages(config=tessdata_config()))
+    except pytesseract.TesseractError as exc:
+        prefix = os.environ.get("TESSDATA_PREFIX", "")
+        raise RuntimeError(
+            "Tesseract не смог загрузить языки.\n"
+            f"  tessdata: {tessdata}\n"
+            f"  TESSDATA_PREFIX: {prefix}\n"
+            f"  {exc}"
+        ) from exc
+
+    missing = [p for p in lang.split("+") if p.strip() and p.strip() not in loaded]
+    if missing:
+        raise RuntimeError(
+            f"Языки не загружены: {', '.join(missing)}\n"
+            f"  tessdata: {tessdata}\n"
+            f"  доступно: {', '.join(sorted(loaded))}"
+        )
 
 
 def tesseract_install_hint() -> str:
@@ -669,7 +719,16 @@ def main() -> int:
         print(tesseract_lang_hint(args.lang, missing_langs), file=sys.stderr)
         return 1
 
+    try:
+        verify_tesseract_runtime(args.lang)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     installed = list_installed_tesseract_langs()
+    tessdata = get_tessdata_dir()
+    if tessdata:
+        print(f"Tesseract tessdata: {tessdata}")
     if installed:
         print(f"Tesseract языки: {', '.join(installed)}")
 

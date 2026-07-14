@@ -13,7 +13,13 @@ scan_split — portable (одна папка)
 ------------------
   run_split.bat / split_pdf_by_titul.exe     разбивка
   run_rename.bat / rename_pdfs_by_titul.exe  переименование
-  tesseract\                                 OCR (не удалять)
+  tesseract\
+    tesseract.exe
+    tessdata\
+      rus.traineddata
+      eng.traineddata
+
+  Если rus.traineddata нет — install_tesseract_rus.bat
 
   Исходники и сборка (если нужно пересобрать exe):
   *.py  *.spec  requirements*.txt  build_windows.bat
